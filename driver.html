@@ -1,0 +1,131 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <title>Driver Portal</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <link rel="stylesheet" href="styles.css"/>
+  <script src="config.js"></script>
+  <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+</head>
+<body>
+<header><h1>Driver Portal</h1></header>
+
+<section class="card" id="loginCard">
+  <h2>Login</h2>
+  <input id="dEmpId" placeholder="Employee ID"/>
+  <input id="dPass" placeholder="Password" type="password"/>
+  <button id="btnLogin">Login</button>
+  <div id="loginMsg"></div>
+</section>
+
+<section class="card" id="dashCard" style="display:none;">
+  <h2>My Requests</h2>
+  <div>
+    <input id="q" placeholder="Search text"/>
+    <button id="btnQ">Search</button>
+  </div>
+  <div id="list"></div>
+</section>
+
+<script>
+const { SUPABASE_URL, SUPABASE_ANON_KEY } = window.APP_CONFIG;
+const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+const sha256 = async (txt) => {
+  const buf = new TextEncoder().encode(txt);
+  const hash = await crypto.subtle.digest('SHA-256', buf);
+  return Array.from(new Uint8Array(hash)).map(b=>b.toString(16).padStart(2,'0')).join('');
+};
+
+let sessionToken=null, driverId=null;
+
+async function rpc(name, args){ const {data,error}=await supabase.rpc(name,args); if(error) throw error; return data; }
+
+document.getElementById('btnLogin').onclick = async () => {
+  const id = document.getElementById('dEmpId').value.trim();
+  const pw = document.getElementById('dPass').value;
+  const msg = document.getElementById('loginMsg');
+  msg.textContent='';
+
+  try{
+    const ph = await sha256(pw);
+    const r = await rpc('driver_login', { p_employee_id:id, p_password_hash:ph });
+    if (!r || r.length===0) { msg.textContent='Invalid credentials'; return; }
+    sessionToken = r[0].session_token; driverId = r[0].driver_id;
+    document.getElementById('loginCard').style.display='none';
+    document.getElementById('dashCard').style.display='';
+    loadList();
+  }catch(e){ msg.textContent=e.message; }
+};
+
+async function loadList(qText=''){
+  const rows = await rpc('get_driver_requests', { p_session_token: sessionToken, p_query: qText || null });
+  const list = document.getElementById('list'); list.innerHTML='';
+  if (!rows || rows.length===0) { list.textContent = 'No requests yet.'; return; }
+  rows.forEach(r => renderRow(r));
+}
+
+function renderRow(r){
+  const d = document.createElement('div'); d.className='result';
+  d.innerHTML = `
+    <b>${r.id}</b> — <i>${r.status}</i><br/>
+    Pickup: ${r.pickup_location?.address} 
+    <button onclick="openMaps(${r.pickup_location?.lat},${r.pickup_location?.lng})">Open Maps</button><br/>
+    Drop: ${r.dropoff_location?.address}<br/>
+    <button onclick="act('${r.id}','accept')">Accept</button>
+    <button onclick="act('${r.id}','reject')">Reject</button>
+    <button onclick="setStatus('${r.id}','En Route')">En Route</button>
+    <button onclick="setStatus('${r.id}','Arrived')">Arrived</button>
+    <button onclick="setStatus('${r.id}','Started')">Started</button>
+    <button onclick="setStatus('${r.id}','Completed')">Completed</button>
+  `;
+  document.getElementById('list').appendChild(d);
+}
+
+window.openMaps = (lat,lng)=>{ if(lat&&lng) window.open(`https://maps.google.com/?q=${lat},${lng}`,'_blank'); };
+
+async function act(id, action){
+  let eta=null, reason=null;
+  if (action==='accept') {
+    const m = prompt('Enter ETA (minutes)');
+    eta = parseInt(m,10)||0;
+  } else if (action==='reject') {
+    reason = prompt('Enter reason (required)');
+    if(!reason){ alert('Reason required'); return; }
+  }
+  try{
+    await rpc('driver_update_request', {
+      p_session_token: sessionToken,
+      p_request_id: id,
+      p_action: action,
+      p_eta_minutes: eta,
+      p_reason: reason,
+      p_status: null
+    });
+    loadList();
+  }catch(e){ alert(e.message); }
+}
+
+window.setStatus = async (id, status) => {
+  try{
+    await rpc('driver_update_request', {
+      p_session_token: sessionToken,
+      p_request_id: id,
+      p_action: 'status',
+      p_eta_minutes: null,
+      p_reason: null,
+      p_status: status
+    });
+    loadList();
+  }catch(e){ alert(e.message); }
+};
+
+document.getElementById('btnQ').onclick = async ()=> {
+  const q = document.getElementById('q').value.trim();
+  try { await rpc('log_driver_search', { p_session_token: sessionToken, p_query: q || null, p_viewed_request: null }); } catch(e){}
+  loadList(q);
+};
+</script>
+</body>
+</html>

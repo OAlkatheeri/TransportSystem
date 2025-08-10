@@ -1,0 +1,12 @@
+
+/* Shared styles */
+body { font-family: system-ui, Arial; margin: 0; padding: 0 12px 40px; background:#fafafa; }
+header { position: sticky; top:0; background:#fff; padding:14px 8px; border-bottom:1px solid #eee; }
+.card { background:#fff; margin:14px 0; padding:14px; border:1px solid #eee; border-radius:8px; }
+.grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:8px; }
+.map-row { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+.map { height:240px; border:1px solid #ddd; border-radius:6px; }
+input, button, select { padding:10px; border:1px solid #ccc; border-radius:6px; }
+button { cursor:pointer; }
+.result { padding:8px; border:1px solid #eee; border-radius:6px; margin:8px 0; }
+@media (max-width: 800px){ .map-row { grid-template-columns:1fr; } }

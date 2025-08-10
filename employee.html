@@ -1,0 +1,195 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <title>Employee Pickup Portal</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <link rel="stylesheet" href="styles.css"/>
+  <script src="config.js"></script>
+  <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+  <script src="https://unpkg.com/axios/dist/axios.min.js"></script>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+</head>
+<body>
+  <header><h1>Request Pickup</h1></header>
+
+  <section class="card">
+    <h2>Check My Requests</h2>
+    <input id="searchInput" placeholder="Enter phone (+971...) OR Request ID (UUID)"/>
+    <button id="btnSearch">Search</button>
+    <div id="results"></div>
+  </section>
+
+  <section class="card">
+    <h2>Cancel a Request</h2>
+    <input id="cancelId" placeholder="Request ID (UUID)"/>
+    <input id="cancelPhone" placeholder="Phone (+971...)"/>
+    <button id="btnCancel">Cancel</button>
+    <div id="cancelMsg"></div>
+  </section>
+
+  <section class="card">
+    <h2>New Request</h2>
+    <div class="grid">
+      <input id="empId" placeholder="Employee ID" />
+      <input id="fullName" placeholder="Full Name" />
+      <input id="phone" placeholder="+9715xxxxxxx" />
+      <input id="designation" placeholder="Designation" />
+      <input id="passengers" type="number" min="1" value="1" />
+      <input id="purpose" placeholder="Purpose of Trip" />
+      <input id="note" placeholder="Special Note (optional)" />
+      <input id="date" type="date"/>
+      <input id="time" type="time"/>
+    </div>
+
+    <div class="map-row">
+      <div>
+        <h4>Pickup Location</h4>
+        <div id="map1" class="map"></div>
+        <input id="pickupAddress" placeholder="Pickup address/label"/>
+      </div>
+      <div>
+        <h4>Drop-off Location</h4>
+        <div id="map2" class="map"></div>
+        <input id="dropoffAddress" placeholder="Drop-off address/label"/>
+      </div>
+    </div>
+
+    <button id="btnSubmit">Submit Request</button>
+    <div id="submitMsg"></div>
+  </section>
+
+<script>
+const { SUPABASE_URL, SUPABASE_ANON_KEY, SMS } = window.APP_CONFIG;
+const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+const isUuid = s => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(s);
+const isPhone = s => /^\+971\d{8,9}$/.test(s);
+
+async function rpc(name, args) {
+  const { data, error } = await supabase.rpc(name, args);
+  if (error) throw error;
+  return data;
+}
+
+document.getElementById('btnSearch').onclick = async () => {
+  const q = document.getElementById('searchInput').value.trim();
+  const container = document.getElementById('results');
+  container.innerHTML = '';
+
+  try {
+    let rows = [];
+    if (isUuid(q)) {
+      const r = await rpc('get_request_by_id', { p_id: q });
+      if (r) rows = [r];
+    } else if (isPhone(q)) {
+      rows = await rpc('get_requests_by_phone', { p_phone: q });
+    } else {
+      container.textContent = 'Enter a valid +971 phone or a Request ID (UUID).';
+      return;
+    }
+    if (!rows || rows.length === 0) { container.textContent = 'No records.'; return; }
+
+    rows.forEach(row => {
+      const div = document.createElement('div');
+      div.className = 'result';
+      div.innerHTML = `
+        <b>ID:</b> ${row.id}<br/>
+        <b>Status:</b> ${row.status}<br/>
+        <b>Requested At:</b> ${new Date(row.requested_at).toLocaleString()}<br/>
+        <b>Passengers:</b> ${row.passengers}<br/>
+        <b>Pickup:</b> ${row.pickup_location?.address || ''} 
+        <button onclick="openMaps(${row.pickup_location?.lat},${row.pickup_location?.lng})">Open in Google Maps</button><br/>
+        <b>Drop-off:</b> ${row.dropoff_location?.address || ''} 
+        <button onclick="openMaps(${row.dropoff_location?.lat},${row.dropoff_location?.lng})">Open in Google Maps</button>
+      `;
+      container.appendChild(div);
+    });
+  } catch (e) { container.textContent = e.message; }
+};
+
+window.openMaps = (lat,lng)=>{ if(lat&&lng) window.open(`https://maps.google.com/?q=${lat},${lng}`,'_blank'); };
+
+document.getElementById('btnCancel').onclick = async () => {
+  const id = document.getElementById('cancelId').value.trim();
+  const phone = document.getElementById('cancelPhone').value.trim();
+  const msg = document.getElementById('cancelMsg');
+  msg.textContent = '';
+  if (!isUuid(id) || !isPhone(phone)) { msg.textContent='Invalid inputs.'; return; }
+
+  if (!confirm('Confirm cancel this request?')) return;
+
+  try {
+    const ok = await rpc('cancel_request', { p_id: id, p_phone: phone });
+    msg.textContent = ok ? 'Canceled.' : 'Not found or cannot cancel.';
+    if (ok) await sendSMS(phone, `Your request ${id} was canceled.`);
+  } catch(e) { msg.textContent = e.message; }
+};
+
+async function sendSMS(to, body) {
+  if (SMS.provider==='textbelt') {
+    try { await axios.post(SMS.endpoint, { phone: to, message: body, key: SMS.key }); } catch(e){}
+  }
+}
+
+let pickupMarker, dropMarker, map1, map2;
+function initMap() {
+  map1 = L.map('map1').setView([24.4539, 54.3773], 11);
+  map2 = L.map('map2').setView([24.4539, 54.3773], 11);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map1);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map2);
+  map1.on('click', e => {
+    if (pickupMarker) pickupMarker.remove();
+    pickupMarker = L.marker(e.latlng).addTo(map1);
+    document.getElementById('pickupAddress').value = `lat:${e.latlng.lat.toFixed(6)}, lng:${e.latlng.lng.toFixed(6)}`;
+  });
+  map2.on('click', e => {
+    if (dropMarker) dropMarker.remove();
+    dropMarker = L.marker(e.latlng).addTo(map2);
+    document.getElementById('dropoffAddress').value = `lat:${e.latlng.lat.toFixed(6)}, lng:${e.latlng.lng.toFixed(6)}`;
+  });
+}
+window.onload = initMap;
+
+document.getElementById('btnSubmit').onclick = async () => {
+  const empId = document.getElementById('empId').value.trim();
+  const fullName = document.getElementById('fullName').value.trim();
+  const phone = document.getElementById('phone').value.trim();
+  const designation = document.getElementById('designation').value.trim();
+  const passengers = parseInt(document.getElementById('passengers').value,10);
+  const purpose = document.getElementById('purpose').value.trim();
+  const note = document.getElementById('note').value.trim();
+  const date = document.getElementById('date').value;
+  const time = document.getElementById('time').value;
+  const pickupAddress = document.getElementById('pickupAddress').value;
+  const dropoffAddress = document.getElementById('dropoffAddress').value;
+  const msg = document.getElementById('submitMsg'); msg.textContent='';
+
+  const phoneOk = /^\+971\d{8,9}$/.test(phone);
+  if (!empId || !fullName || !phoneOk || !date || !time || !pickupMarker || !dropMarker) {
+    msg.textContent = 'Please fill all required fields (valid phone, map points, date & time).'; return;
+  }
+
+  const requestedAt = new Date(`${date}T${time}:00`);
+  const pickup = { lat: pickupMarker.getLatLng().lat, lng: pickupMarker.getLatLng().lng, address: pickupAddress };
+  const dropoff = { lat: dropMarker.getLatLng().lat, lng: dropMarker.getLatLng().lng, address: dropoffAddress };
+
+  try {
+    // Validate employee via RPC (uses the Excel uploaded by Admin)
+    const valid = await rpc('validate_employee', { p_employee_id: empId, p_full_name: fullName });
+    if (!valid) { msg.textContent = 'Employee not found. Contact admin.'; return; }
+
+    const reqId = await rpc('create_request', {
+      p_employee_id: empId, p_full_name: fullName, p_phone: phone, p_designation: designation,
+      p_passengers: passengers, p_purpose: purpose, p_note: note,
+      p_pickup: pickup, p_dropoff: dropoff, p_requested_at: requestedAt.toISOString()
+    });
+
+    msg.textContent = `Request submitted. ID: ${reqId}`;
+    await sendSMS(phone, `Pickup request created. ID: ${reqId}`);
+  } catch(e) { msg.textContent = e.message; }
+};
+</script>
+</body>
+</html>
